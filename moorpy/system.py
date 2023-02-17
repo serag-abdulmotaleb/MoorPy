@@ -165,7 +165,7 @@ class System():
         type_string : string
             string identifier of LineType object that this Line is to be.
         nSegs : int, optional
-            number of segments to split the line into. The default is 20.
+            number of segments to split the line into. The default is 40.
         pointA int, optional
             Point number to attach end A of the line to.
         pointB int, optional
@@ -177,7 +177,7 @@ class System():
 
         '''
         
-        self.lineList.append( Line(self, len(self.lineList)+1, lUnstr, self.lineTypes[type_string].name, nSegs=nSegs, cb=cb) )
+        self.lineList.append( Line(self, len(self.lineList)+1, lUnstr, self.lineTypes[type_string].name, nSegs=nSegs, cb=cb, attachments = [pointA,pointB]) ) #NOTE: added attachments argument
         
         if pointA > 0:
             if pointA <= len(self.pointList):
