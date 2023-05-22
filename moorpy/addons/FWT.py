@@ -5,6 +5,7 @@ Created on Thu Feb  9 08:48:46 2023
 @author: seragela
 """
 
+import copy
 import numpy as np
 import pandas as pd
 from scipy.interpolate import LinearNDInterpolator,RegularGridInterpolator,interp1d
@@ -15,6 +16,33 @@ from moorpy.addons.wamit_readers import read_wamit1, read_wamit3, read_wamit12d
 import matplotlib.pyplot as plt
 
 def get_output_pdf(x,f_x,y,nbins=5):
+    """
+    Calculates probabiltiy density function of output y given the probability distribution of input x and the corresponding y values.
+
+    Parameters
+    ----------
+    x : numpy array
+        Input values.
+    f_x : numpy array
+        Input pdf.
+    y : output values
+        Output values
+    nbins : int, optional
+        number of bins to split y values into , by default 5
+
+    Returns
+    -------
+    y_bins : numpy array
+        Output values at specified bins.
+    f_y : numpy array
+        Output pdf at specified bins.
+    dy: float
+        bin width.
+    y_mean: float
+        Expected value of y.
+    y_mode: float
+        Most probable value of y.
+    """
     dx = np.mean(np.diff(x))
     dy = (y.max()-y.min())/nbins
     y_bins = np.arange(y.min()+dy/2,y.max()-dy/2+dy,dy)
@@ -24,24 +52,85 @@ def get_output_pdf(x,f_x,y,nbins=5):
     return y_bins,f_y,dy,y_mean,y_mode
 
 def assign_FWT_props(FWT,ms,adjust_ballast=True):
-    ms.bodyList[0].v = FWT.volDisp; 
-    ms.bodyList[0].rM = np.array([0,0,FWT.cb[2]+FWT.Iwp/FWT.volDisp]); 
-    ms.bodyList[0].AWP = FWT.Awp
+    """_summary_
+
+    Parameters
+    ----------
+    FWT : FWT object
+        FWT object.
+    ms : System object
+        moorpy's mooring System object (with unassigned mass and mooring properties).
+    adjust_ballast : bool, optional
+        If true, ballast will be adjusted to get the weight corresponding to the displaced volume, by default True
+
+    Returns
+    -------
+    feasible : bool
+        Whether there is sufficient space for ballast or not.
+    mass : float
+        Total FWT mass (after adjustment if applicable).
+    cg: numpy array
+        Total FWT center of gravity (after adjustment if applicable).
+    M: numpy array
+        FWT mass matrix (after adjustment if applicable)
+    Khs: numpy array
+        FWT hydrostatic stiffness matrix (after adjustment if applicable)
+    ms_Init: moorpy's System object
+        A copy of mooring System object after assigning FWT's attributes.
+
+    """
+    ms_init = copy.deepcopy(ms)
+    ms_init.bodyList[0].v = FWT.volDisp; 
+    ms_init.bodyList[0].rM = np.array([0,0,FWT.cb[2]+FWT.Iwp/FWT.volDisp]); 
+    ms_init.bodyList[0].AWP = FWT.Awp
 
     if adjust_ballast:
         F_v0 = ms.bodyList[0].getForces(lines_only = True) # vertical pretension
         feasible, mass, cg, M, Khs = FWT.adjust_ballast(F_v0,adjust_FWT=False)
-        ms.bodyList[0].m = mass
-        ms.bodyList[0].rCG = cg
+        ms_init.bodyList[0].m = mass
+        ms_init.bodyList[0].rCG = cg
     else:
-        ms.bodyList[0].m = FWT.mass
-        ms.bodyList[0].rCG = FWT.cg
+        ms_init.bodyList[0].m = FWT.mass
+        ms_init.bodyList[0].rCG = FWT.cg
         feasible, mass, cg, M, Khs = True, FWT.mass, FWT.cg, FWT.M, FWT.Khs
 
-    return feasible, mass, cg, M, Khs
+    return feasible, mass, cg, M, Khs, ms_init
 
 class FWT:
     def __init__(self,fwt_dict):
+        """Initializes FWT object
+
+        Parameters
+        ----------
+        fwt_dict : dictionary with the following keys:
+            mass (float): Total FWT mass.
+            volDisp (float): FWT displaced volume.
+            ptfmPosition (array): Initial platform position.
+            MOI (array): Moments of inertia (Ixx, Iyy, Izz)
+            CG (array): Center of gravity position.
+            CB (array): Center of buoyancy position.
+            Awp (float): Waterplane area
+            Iwp (float): Second moment of the waterplane area about x- or y-axis (assuming axis-symmetric configuration)
+            ballArea (float): Total horizontal cross-sectional area of the available ballast tanks.
+            ballLvl (float): Ballast level in available tanks (assuming all available tanks to have the same level)
+            ballBot (float): Minimum vertical position of available tanks (assuming all available tanks have the same lowest level)
+            ballMaxLvl (float): Maximum vertical position of available tanks (assuming all available tanks have the same max. level)
+            ballDensity (float): Ballast density in kg/m^3.
+            linDamping (2d numpy array): Additional linear damping matrix.
+            quadDamping (2d numpy array): Quadratic damping matrix
+            wamitRoot (str): Path to wamit files with root file name included.
+            hHub (float): Hub height in m.
+            rotorRadius (float): Rotor radius in m.
+            TwrElev (array): Tower height values at which diameters and drag coefficients are given.
+            TwrDiam (array): Tower diameters at specified heights.
+            TwrCd (array): Tower drag coefficients at specified heights.
+            hydroFlag (int): 0: No hydrodynamic loads, 1: 1st order hydordynamic loads only, 2: 1st + 2nd order diff hydrodynamic loads
+            CCBlade (array): 3-elements bool array for using CCBlade, 1st: mean loads, 2nd: excitation, 3rd: added mass and damping
+            aeroRoot (str): Path to aerodynamic coefficients files with root file name included.
+            yamlFile (str): ROSCO yaml input file.
+            aeroFlag (int): 0: No aerodynamic loads, 1: Include aerodynamic loads (TODO: add 2 option instead of the CCBlade switch)
+            aeroAvg (bool): If true,  Aerodynamic coefficients are averaged based on a normal distribution of wind speeds around the given mean value.
+        """
         # Platform properies
         self.mass = fwt_dict['mass'] # total fwt mass
         self.volDisp = fwt_dict['volDisp'] # fwt volume of displacement
@@ -62,6 +151,7 @@ class FWT:
         
         # RNA properties
         self.hHub = fwt_dict['hHub']
+        self.rotorR = fwt_dict['rotorRadius']
 
         # Tower properties
         z_twr = fwt_dict['TwrElev']
@@ -96,6 +186,9 @@ class FWT:
         self.Khs = C
 
         # Hydrodynamics
+        self.hydro1 = int(bool(fwt_dict['hydroFlag']))
+        self.hydro2 = int(bool(fwt_dict['hydroFlag'] == 2))
+
         wamit_root = fwt_dict['wamitRoot']
         
         ## 1st order coefficients
@@ -164,7 +257,7 @@ class FWT:
             self.ccAeroDerivs = derivs
 
         # TODO: Generate br and ar functions if aero_root is an iterable (should be reflected in get_aero_coeffs method)
-        self.aero = int(bool(fwt_dict['aerodynamics']))
+        self.aero = int(bool(fwt_dict['aeroFlag']))
         self.ccFlag = cc_flag
         self.avgAero = fwt_dict['aeroAvg']
         if cc_flag[0]:
@@ -199,7 +292,30 @@ class FWT:
                                  bounds_error=False, fill_value=None)
             # self.fAero = LinearNDInterpolator(list(zip(aero2[:,0],aero2[:,1])),aero2[:,2] + 1j*aero2[:,3], fill_value = 0.0)
 
+
     def get_aero_coeffs(self,omega,Uw,sigma_u,beta = 0.):
+        """Evaluates aerodynamic coefficients matrices for a given wind speed, direction and frequency range.
+
+        Parameters
+        ----------
+        omega : array
+            Frequencies at which the aerodynamic coefficients will be evaluated in rad/s.
+        Uw : float
+            Wind speed in m/s.
+        sigma_u : float
+            Standard deviation of wind speed.
+        beta : float, optional
+            Wind direction, by default 0.
+
+        Returns
+        -------
+        A_aero : 2d numpy array
+            6x6 aerodynamic added mass matrix.
+        B_aero : 2d numpy array
+            6x6 aerodynamic damping matrix.
+        H_UF : 1d numpy array
+            6x1 aerodynamic complex exctiation force coefficients.
+        """
         
         A_aero = np.zeros([6,6,len(omega)])
         B_aero = np.zeros([6,6,len(omega)])
@@ -355,8 +471,9 @@ class FWT:
         H_UF = H_Uf * np.expand_dims(aero_vec,1) * self.aero
         return A_aero, B_aero, H_UF
         
-    
+
     def get_hydro1_coeffs(self,omegas,beta = 0.):
+
         nb = np.argmin(abs(beta - self.betas))
         if np.abs(beta-self.betas[nb]) > 0.01*self.betas[nb]:
             print(f'Warning: Wave direction chosen {beta} is not available in wave directions. Closest available is {self.betas[nb]}')
@@ -369,8 +486,8 @@ class FWT:
             for j in range(6):
                 A[i,j] = np.interp(omegas,self.omegas,self.A[i,j],left = self.A0[i,j], right = self.Ainf[i,j])
                 B[i,j] = np.interp(omegas,self.omegas,self.B[i,j])
-            Xre[i] = np.interp(omegas,self.omegas,self.Xre[i,:,nb])
-            Xim[i] = np.interp(omegas,self.omegas,self.Xim[i,:,nb])
+            Xre[i] = np.interp(omegas,self.omegas,self.Xre[i,:,nb]) * self.hydro1
+            Xim[i] = np.interp(omegas,self.omegas,self.Xim[i,:,nb]) * self.hydro1
         
         
         nb = np.argmin(abs(beta - self.betas))
@@ -378,8 +495,10 @@ class FWT:
             print(f'Warning: Wave direction chosen {beta} is not available in wave directions. Closest available is {self.betas[nb]}')
         
         return A,B,Xre,Xim
-    
+
+
     def get_hydro2_coeffs(self,omegas,Hs,Tp,gamma,beta = 0.):
+
         omega_lf = 0.05*2*np.pi #omegas.max()#
         S_sd = np.zeros([6,6,len(omegas)],dtype = 'complex')
         
@@ -403,8 +522,9 @@ class FWT:
                 TT = np.array([np.outer(vec,np.conj(vec).T) for vec in qtf.T])
                 TT = np.moveaxis(TT,0,-1)
                 
-                S_sd[:,:,nw] = 8*np.trapz(TT*S_zeta*S_zeta_mu,omegas,axis=2)
+                S_sd[:,:,nw] = 8*np.trapz(TT*S_zeta*S_zeta_mu,omegas,axis=2)  * self.hydro2
         return S_sd
+    
     
     def adjust_ballast(self,F_v0,adjust_FWT = False):
         """
@@ -414,11 +534,21 @@ class FWT:
         ----------
         F_v0 : float
             Total mooring vertical pretension.
+        adjust_FWT : bool
+            If true, fwt attributes are adjusted to the new values. .
 
         Returns
         -------
         feasible : bool
             A flag to determine whether the ballast adjustment is possible or not.
+        mass : float
+            Adjusted mass.
+        cg : array
+            Adjusted center of gravity position.
+        M : 2d numpy array
+            Adjusted mass matrix.
+        Khs: 2d numpy array
+            Adjusted hydrostatic stiffness matrix.
 
         """
         dm = (1025*self.volDisp-self.mass) - F_v0/9.81 # mass adjustment to achieve desired draft under given pretension
@@ -451,6 +581,7 @@ class FWT:
         else:
             feasible = False
             return feasible, mass*np.nan, cg*np.nan, M*np.nan, Khs*np.nan
+        
                    
     def get_mean_loads(self,Uw,Hs,Tp,gamma,beta):
         """
@@ -515,14 +646,15 @@ class FWT:
             
         f_drift = np.real(f_d)
         S_zeta = jonswap(omegas/2/np.pi, Hm0 = Hs, Tp = Tp, gamma = gamma, normalize = False)/(2*np.pi)
-        F_drift = np.array([2*np.trapz(f_drift[dof,:]*S_zeta,omegas) for dof in range(6)])
+        F_drift = np.array([2*np.trapz(f_drift[dof,:]*S_zeta,omegas) for dof in range(6)]) * self.hydro2
         
         #### TODO: current drag
         
         F_mean = F_thrust + F_drift + F_twr
         return F_mean
     
-    def get_dynamic_response(self, K_moor, omegas, Uw, Hs, Tp, TI = 'B', gamma = 'default', beta = 0.0, 
+    
+    def get_dynamic_response2(self, K_moor, omegas, Uw, Hs, Tp, TI = 'B', gamma = 'default', beta = 0.0, 
                              tol = 0.01,iters = 500, M = 0, Khs = 0):
         
        
@@ -674,12 +806,61 @@ class FWT:
             pass
         
         return X_std, X_wfstd, X_lfstd, RAOs, S_Xwf, S_Xlf, S_X
+
+
+    def get_dynamic_response(self,K_moor,omegas,Uw,Hs,Tp,TI='B',gamma = 'default',beta = 0.,
+                             tol = 0.01,iters = 500, M = None, Khs = None):
+        """Evaluates standard deviations, spectra of the total dynamic response and its wave frequency and low frequency components.
+
+        Parameters
+        ----------
+        K_moor : 2d numpy array
+            Mooring stiffness matrix
+        omegas : array
+            Frequencies at which dynamics are to be solved in rad/s.
+        Uw : float
+            Mean wind speed at hub height in m/s.
+        Hs : float
+            Significant wave height in m.
+        Tp : float
+            Peak wave period in s.
+        TI : str or float, optional
+            Turbulence intensity (can either be IEC class or value), by default 'B'.
+        gamma : str or float, optional
+            JONSWAP wave peak parameter (can either be 'default' or value), by default 'default'
+        beta : float, optional
+            Direction of aligned wind and waves condition, by default 0.
+        tol : float, optional
+            Relative tolerence for convergence of iterations , by default 0.01
+        iters : int, optional
+            Maximum number of iterations, by default 500
+        M : None or 2d numpy array, optional
+            Mass matrix to be used instead of FWT attribute, by default None
+        Khs : None or 2d numpy array, optional
+            Hydrostatic stiffness matrix to be used instead of FWT attribute, by default None
+
+        Returns
+        -------
+        X_std : array
+            Standard deviation of 6 dof motions.
+        X_wfstd : array
+            Standard deviation of 6 dof wave frequency motions.
+        X_lfstd : array
+            Standard deviation of 6 dof low frequency motions.
+        RAOs: 2d numpy array
+            Response amplitude operators (including only 1st order wave excitatcion), each row represents the RAOs for a dof at the given frequencies.
+        S_X: 2d numpy array
+            Motion response spectra, each row represents the spectral density for a dof at the given frequencies.
+        S_Xwf: 2d numpy array
+            Wave frequency motion response spectra, each row represents the spectral density for a dof at the given frequencies.
+        S_Xlf: 2d numpy array
+            Low frequency motion response spectra, each row represents the spectral density for a dof at the given frequencies.
         
-    def get_dynamic_response2(self,K_moor,omegas,Uw,Hs,Tp,TI='B',gamma = 'default',beta = 0.,
-                             tol = 0.01,iters = 500, M = 0, Khs = 0):
+        """
         # Frequency independent coefficietns (mass, quadratic damping and hydrostatic stiffness)
-        if M == 0 or Khs == 0:
+        if (M is None):
             M = self.M
+        if (Khs is None):
             Khs = self.Khs
         
         Bq = np.diag(self.Bq)
@@ -689,7 +870,7 @@ class FWT:
         h_hub = self.hHub                
         S_zeta = jonswap(omegas/2/np.pi, Hm0 = Hs, Tp = Tp, gamma = gamma, normalize = False)/2/np.pi # generate wave elevation spectrum
         # S_Uw,sigma_u = kaimal(omegas/2/np.pi, Uw, h_hub,TI = TI)/2/np.pi
-        _,S_Uw,sigma_u = kaimal_spectrum(omegas/2/np.pi,120., Uw, h_hub,TI = TI)
+        _,S_Uw,sigma_u = kaimal_spectrum(omegas/2/np.pi,self.rotorR, Uw, h_hub,TI = TI)
         S_Uw = S_Uw/2/np.pi
 
         # Rotor aerodynamic coefficients
@@ -760,9 +941,13 @@ class FWT:
         X_wfstd[3:] *= 180/np.pi
         X_lfstd[3:] *= 180/np.pi
         
+        S_X = np.abs(np.diagonal(S_X).T)
+        S_Xwf = np.abs(np.diagonal(S_Xwf).T)
+        S_Xlf = np.abs(np.diagonal(S_Xlf).T)
+
         print(ni)
         
-        return X_std, X_wfstd, X_lfstd, RAOs, np.abs(np.diagonal(S_Xwf).T), np.abs(np.diagonal(S_Xlf).T), np.abs(np.diagonal(S_X).T)
+        return X_std, X_wfstd, X_lfstd, RAOs, S_X, S_Xwf, S_Xlf
 
 
                 
