@@ -40,6 +40,8 @@ def spread_mooring(moor_dict, tol = 0.01, maxIter = 500, no_fail = True, finite_
                 number of lines per mooring leg
             lineLengths: list of floats
                 line lengths in meters
+            segLengths: list of floats
+                segment lengths in meters
             lineDiameters: list of floats
                 line nominal diameters in meters
             lineTypes: list of strings
@@ -58,9 +60,6 @@ def spread_mooring(moor_dict, tol = 0.01, maxIter = 500, no_fail = True, finite_
         moorpy convergence flag.
     ms : moorpy.System
         A moorpy mooring System object.
-    F_v0: float
-        Total vertical pretension
-
     """
     # TODO: make line discretization customizable
     # Read parameters from input dictionary
@@ -78,6 +77,7 @@ def spread_mooring(moor_dict, tol = 0.01, maxIter = 500, no_fail = True, finite_
     z_fair = moor_dict['zFair']
     n_lines = moor_dict['nLines']
     line_lengths = moor_dict['lineLengths'] 
+    seg_lengths = moor_dict['segLengths']
     line_diameters = moor_dict['lineDiameters'] 
     line_types = moor_dict['lineTypes']
     material_dicts = moor_dict['materialDicts'] 
@@ -121,14 +121,16 @@ def spread_mooring(moor_dict, tol = 0.01, maxIter = 500, no_fail = True, finite_
                 r_0 = r_fairlead
                 point_masses = moor_dict['clumpMasses'] # a list of intermediate clump masses (must be 1 less than the number of lines)
                 point_volumes = moor_dict['buoyVolumes'] # a list of intermediate buoy volumes (must be 1 less than the number of lines)
-                for L_seg,lt,m,v in zip(line_lengths[:-1],line_types[:-1], point_masses, point_volumes):
-                    r_0 = r_0 + L_seg/L_tot*(r_anchor-r_fairlead)
+                for line_len,lt,seg_len,m,v in zip(line_lengths[:-1],line_types[:-1], seg_lengths, point_masses, point_volumes):
+                    r_0 = r_0 + line_len/L_tot*(r_anchor-r_fairlead)
+                    n_segs = int(line_len/seg_len)
                     ms.addPoint(0, r_0, m = m, v = v)
-                    ms.addLine(L_seg, lt, pointA = len(ms.pointList)-1, pointB = len(ms.pointList))
-                    #TODO: add nseg
+                    ms.addLine(line_len, lt, nSegs=n_segs, pointA = len(ms.pointList)-1, pointB = len(ms.pointList))
+
             ## Add anchor point
             ms.addPoint(1, r_anchor)
-            ms.addLine(line_lengths[-1], line_types[-1], pointA = len(ms.pointList) -1, pointB = len(ms.pointList))
+            n_segs = int(line_lengths[-1]/seg_lengths[-1])
+            ms.addLine(line_lengths[-1], line_types[-1],nSegs = n_segs, pointA = len(ms.pointList)-1, pointB = len(ms.pointList))
     
     ms.initialize()
     conv = ms.solveEquilibrium(tol = tol, no_fail = no_fail, maxIter = maxIter, finite_difference = finite_difference)
