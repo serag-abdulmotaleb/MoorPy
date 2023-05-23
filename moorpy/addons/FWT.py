@@ -117,7 +117,7 @@ class FWT:
             ballMaxLvl (float): Maximum vertical position of available tanks (assuming all available tanks have the same max. level)
             ballDensity (float): Ballast density in kg/m^3.
             linDamping (2d numpy array): Additional linear damping matrix.
-            quadDamping (2d numpy array): Quadratic damping matrix
+            quadDamping (2d numpy array): Quadratic damping matrix (#TODO: require only diagonal terms)
             wamitRoot (str): Path to wamit files with root file name included.
             hHub (float): Hub height in m.
             rotorRadius (float): Rotor radius in m.
@@ -948,8 +948,3 @@ class FWT:
         print(ni)
         
         return X_std, X_wfstd, X_lfstd, RAOs, S_X, S_Xwf, S_Xlf
-
-
-                
-                    
-

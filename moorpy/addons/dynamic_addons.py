@@ -28,13 +28,20 @@ def get_mean_response(ms,F_mean, tol=0.01, maxIter=500, no_fail=True, finite_dif
     -------
     X : numpy array
         Mean platform displacement.
+    K_moor : 2d numpy array:
+        Linearized mooring stiffness matrix at mean position.
+    s : numpy array
+        Location of nodes along maximum tension mooring leg.
+    T_mean : numpy array
+        Mean tensions at node locations in maximum tension mooring leg.
+    ms_mean : moorpy System object
+        moorpy System object at mean position.
     TA : numpy array
         Mean line tensions at end A.
     TB : numpy array
         Mean line tensions at end B.
     conv : bool
         DESCRIPTION.
-
     """
     ms_mean = copy.deepcopy(ms)
     ms_mean.bodyList[0].type = 0
@@ -43,20 +50,35 @@ def get_mean_response(ms,F_mean, tol=0.01, maxIter=500, no_fail=True, finite_dif
     conv = ms_mean.solveEquilibrium(tol=tol, maxIter=maxIter, no_fail=no_fail, finite_difference=finite_difference)
 
     if conv:
-        X = ms_mean.bodyList[0].r6.copy()
+        X_mean = ms_mean.bodyList[0].r6.copy()
         TA = np.array([line.TA for line in ms_mean.lineList])
         TB = np.array([line.TB for line in ms_mean.lineList])
-        
+
+        # tension distribution in maximum tension leg
+        body = ms_mean.bodyList[0]
+        fairleads = [ms_mean.pointList[pidx-1] for pidx in body.attachedP]
+        fairlead_tensions = [la.norm(fairlead.getForces()) for fairlead in fairleads]
+        max_ten_id = fairleads[fairlead_tensions.index(max(fairlead_tensions))].number
+        leg_line_ids,point_ids = get_mooring_leg(ms_mean,max_ten_id) # get mooring leg lines and points indicies in the mooring System
+        leg_lines = [ms_mean.lineList[line_id - 1] for line_id in leg_line_ids] # get lines at offset position
+        leg_len = np.sum([line.L for line in leg_lines])
+        n_nodes = np.sum([line.nNodes for line in leg_lines]) - (len(leg_lines) - 1)
+        s = np.linspace(0,leg_len,n_nodes)
+        T_mean = np.hstack([line.getLineTens()[:-1] for line in leg_lines] + [leg_lines[-1].TB]) # get tensions at offset position
+
     else:
-        X = ms_mean.bodyList[0].r6.copy()*np.nan
+        X_mean = ms_mean.bodyList[0].r6.copy()*np.nan
         TA = np.array([line.TA for line in ms_mean.lineList])*np.nan
         TB = np.array([line.TB for line in ms_mean.lineList])*np.nan
-    X[3:]*=180/np.pi
+        s = np.nan
+        T_mean = np.nan
+
+    X_mean[3:]*=180/np.pi
     
     K_moor = ms_mean.bodyList[0].getStiffness()
     # K_moor = ms_mean.getSystemStiffness(DOFtype="free", dx = 0.1, dth = 0.1, solveOption=1, lines_only=True, plots=0)
 
-    return X,TA,TB,K_moor,ms_mean,conv
+    return X_mean,K_moor,s,T_mean,ms_mean,max_ten_id,TA,TB,conv
 
 def get_mooring_leg(ms, fairlead_id):
     """    
@@ -105,7 +127,7 @@ def get_mooring_leg(ms, fairlead_id):
     
     return line_ids,point_ids
 
-def get_line_matrices(Line, LineType, sigma_u, depth, kbot, cbot):
+def get_line_matrices(Line, LineType, sigma_u, depth, kbot, cbot, seabed_tol = 1e-3):
     """
     Evaluates mooring line dynamic equation of motion matrices.
 
@@ -180,7 +202,7 @@ def get_line_matrices(Line, LineType, sigma_u, depth, kbot, cbot):
     K[0:3,0:3] += K_e2
     K[0:3,3:6] += -K_e2
     
-    if np.isclose(r_nodes[0,2],-depth,1e-2):
+    if np.isclose(r_nodes[0,2],-depth,seabed_tol):
         K[2,2] += kbot
         B[2,2] += cbot 
     
@@ -321,7 +343,7 @@ def get_leg_matrices(ms,fairlead_id,moor_dict, sigma_u):
     
     return M,A,B,K,n_dofs,r_nodes
 
-def get_qs_tension(ms,offset,fairlead_id):
+def get_qs_tension(ms,offset,fairlead_id, tol=0.01, maxIter=500, no_fail=True, finite_difference=False):
     """Evaluates quasi-static standard deviation in a mooring leg based on platform offset.
 
     Parameters
@@ -352,7 +374,7 @@ def get_qs_tension(ms,offset,fairlead_id):
     
     ms_offset.bodyList[0].r6 += offset # add offset
     ms_offset.initialize()
-    conv = ms_offset.solveEquilibrium(no_fail = True)
+    conv = ms_offset.solveEquilibrium(tol=tol, maxIter=maxIter, no_fail=no_fail, finite_difference=finite_difference)
 
     lines2 = [ms_offset.lineList[line_id - 1] for line_id in line_ids] # get lines at offset position
     T2 = np.hstack([line.getLineTens()[:-1] for line in lines2] + [lines2[-1].TB]) # get tensions at offset position
@@ -361,9 +383,9 @@ def get_qs_tension(ms,offset,fairlead_id):
     l_bot = np.sum([line.LBot for line in lines2]) # get length of mooring leg lying on seabed
     uplift = l_bot < 1 # anchor uplift flag
 
-    line_len = np.sum([line.L for line in lines2])
+    leg_len = np.sum([line.L for line in lines2])
     n_nodes = np.sum([line.nNodes for line in lines2]) - (len(lines2) - 1)
-    s = np.linspace(0,line_len,n_nodes)
+    s = np.linspace(0,leg_len,n_nodes)
 
     if conv:
         return sigma_T,s,uplift
@@ -380,7 +402,7 @@ def get_dynamic_tension(ms,fairlead_id,moor_dict,omegas,S_zeta,RAOs,tol = 0.01,i
     fairlead_id : int
         Index of the fairlead Point object in the moorpy Body object at which the mooring leg starts.        
     moor_dict : dictionary
-    dictionary with the keys specified in the spread_mooring function in the mooring_configs module.
+        dictionary with the keys specified in the spread_mooring function in the mooring_configs module.
     omegas : array
         Frequencies at which to solve line dynamics in rad/s.
     S_zeta : array
@@ -513,10 +535,8 @@ def plot_mode_shape(idx,freqs,mode_shapes,r_0,amp_factor = 10.):
     x_0 = r_0[:,0]
     y_0 = r_0[:,1]
     z_0 = r_0[:,2]
-    
-    
+        
     fig,ax = plt.subplots(1,1,subplot_kw={"projection": "3d"})
     ax.plot(x_0,y_0,z_0,'-ko',label='initial')
     ax.plot(x+x_0,y+y_0,z+z_0,'--ro',label='mode shape')
     fig.suptitle(f'frequency {freqs[idx]} Hz')
-    
