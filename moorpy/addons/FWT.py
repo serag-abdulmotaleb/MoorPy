@@ -13,6 +13,7 @@ import scipy.stats as stats
 from moorpy.addons.auxiliaries import jonswap, kaimal, kaimal_spectrum, get_transfer_function, get_linearized_damping
 from moorpy.addons.gen_discon import tune_ROSCO
 from moorpy.addons.wamit_readers import read_wamit1, read_wamit3, read_wamit12d
+from datetime import datetime
 import matplotlib.pyplot as plt
 
 def get_output_pdf(x,f_x,y,nbins=5):
@@ -896,7 +897,7 @@ class FWT:
         S_Xlf = np.zeros([6,6,len(omegas)], dtype = 'complex')
         H_FX = np.zeros([6,6,len(omegas)],dtype='complex')
         RAOs = np.zeros([6,len(omegas)],dtype = 'complex')
-        
+        start = datetime.now()
         for ni in range(iters):
             for nw,omega in enumerate(omegas):
                 # Quadratic damping linearization
@@ -933,7 +934,8 @@ class FWT:
             
             if all(np.abs(Xd_std-Xd_std0) < tol*np.abs(Xd_std0)):
                 break
-        
+        print(f'Finished {ni} motion response iterations in {datetime.now()-start} seconds.')
+
         X_std = np.sqrt(np.diag(np.trapz(np.abs(S_X), omegas, axis=2)))
         X_wfstd = np.sqrt(np.diag(np.trapz(np.abs(S_Xwf), omegas, axis = 2))) # update wave frequency motion std dev
         X_lfstd = np.sqrt(np.diag(np.trapz(np.abs(S_Xlf), omegas, axis = 2))) # update low frequency motion std dev  

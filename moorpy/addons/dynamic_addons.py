@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from matplotlib import animation
 from scipy.interpolate import interp1d
 import moorpy as mp
+from datetime import datetime
 
 def get_mean_response(ms,F_mean, tol=0.01, maxIter=500, no_fail=True, finite_difference=False):
     """
@@ -435,6 +436,7 @@ def get_dynamic_tension(ms,fairlead_id,moor_dict,omegas,S_zeta,RAOs,tol = 0.01,i
     RAO_fl = np.array([RAOs[:3,i] + np.cross(RAOs[3:,i],r_fl) for i in range(RAOs.shape[1])]).T #3DOF RAO of the fairlead
 
     sigma_Xd = 1
+    start = datetime.now()
     for ni in range(iters):
         sigma_Xd0 = sigma_Xd
         M,A,B,K,n_dofs,r_nodes = get_leg_matrices(ms,fairlead.number,moor_dict,sigma_Xd)
@@ -451,11 +453,12 @@ def get_dynamic_tension(ms,fairlead_id,moor_dict,omegas,S_zeta,RAOs,tol = 0.01,i
 
         if all(np.abs(sigma_Xd-sigma_Xd0) <= tol*np.abs(sigma_Xd0)):
             break
-    print(ni)
+    print(f'Finished {ni} dynamic tension iterations in {datetime.now()-start} seconds.')
         
     H_zF = np.zeros([n_dofs,len(omegas)],dtype='complex')
     H_zT = np.zeros([int(n_dofs/3),len(omegas)],dtype='complex')
 
+    start = datetime.now()
     for nw in range(len(omegas)):
         for n in range(int(n_dofs/3 - 1)):
             H_zF[3*n:3*n+3,nw] = np.matmul(K[3*n:3*n+3,3*n+3:3*n+6],(X[3*n+3:3*n+6,nw] - X[3*n:3*n+3,nw]))
@@ -463,6 +466,7 @@ def get_dynamic_tension(ms,fairlead_id,moor_dict,omegas,S_zeta,RAOs,tol = 0.01,i
     
         H_zF[-3:,nw] = np.matmul(K[-3:,-3:],(X[-6:-3,nw] - X[-3:,nw]))
         H_zT[-1,nw] = la.norm(H_zF[-3:,nw])
+    print(f'Finished dynamic tension calculations in {datetime.now()-start} seconds.')
     
     S_T = np.abs(H_zT)**2*S_zeta 
     sigma_T = np.sqrt(np.trapz(S_T,omegas))
