@@ -4,10 +4,15 @@ Created on Tue Feb 21 09:49:01 2023
 
 @author: seragela
 """
+import os
+import multiprocessing
+os.environ['OMP_NUM_THREADS'] = str(multiprocessing.cpu_count())
 import copy
 import numpy as np
+from numpy.linalg import solve,norm
 import pandas as pd
 import scipy.linalg as la
+import scipy.sparse as sp
 import matplotlib.pyplot as plt
 from matplotlib import animation
 from scipy.interpolate import interp1d
@@ -160,7 +165,7 @@ def get_line_matrices(Line, LineType, sigma_u, depth, kbot, cbot, seabed_tol = 1
     """
     
     n_nodes = Line.nNodes
-    n_lines = n_nodes - 1 # N.B.: I am using leg->line->segment instead of line->segment->element to be consistent with moorpy's notation
+    n_lines = n_nodes - 1 # NOTE: I am using leg->line->segment instead of line->segment->element to be consistent with moorpy's notation
     
     X_nodes,Y_nodes,Z_nodes,T_nodes = Line.getCoordinate(np.linspace(0,1,n_nodes)*Line.L) # coordinates of line nodes and tension values
     r_nodes = np.vstack((X_nodes,Y_nodes,Z_nodes)).T # coordinates of line nodes
@@ -393,7 +398,7 @@ def get_qs_tension(ms,offset,fairlead_id, tol=0.01, maxIter=500, no_fail=True, f
     else:
         return sigma_T*np.nan,uplift*np.nan
 
-def get_dynamic_tension(ms,fairlead_id,moor_dict,omegas,S_zeta,RAOs,tol = 0.01,iters=100):
+def get_dynamic_tension(ms,fairlead_id,moor_dict,omegas,S_zeta,RAOs,tol = 0.01,iters=100, w = 0.8):
     """Evaluates dynamic tension standard deviations along a mooring leg.
 
     Parameters
@@ -409,7 +414,7 @@ def get_dynamic_tension(ms,fairlead_id,moor_dict,omegas,S_zeta,RAOs,tol = 0.01,i
     S_zeta : array
         Wave elevation spectral density at specified frequencies in m^2.s/rad
     RAOs : 2d numpy array
-        First order Response Ampltiude operators for 6 dofs (rows) at the specified frequencies (columns)
+        First order Response Ampltiude operators for 6 dofs (columns) at the specified frequencies (rows)
     tol : float, optional
         Relative tolerence for iteration convergence, by default 0.01
     iters : int, optional
@@ -433,49 +438,57 @@ def get_dynamic_tension(ms,fairlead_id,moor_dict,omegas,S_zeta,RAOs,tol = 0.01,i
     # evaluate top end motion
     fairlead = ms.pointList[fairlead_id - 1]
     r_fl = fairlead.r - body.r6[:3] #floater cg to fairlead vector
-    RAO_fl = np.array([RAOs[:3,i] + np.cross(RAOs[3:,i],r_fl) for i in range(RAOs.shape[1])]).T #3DOF RAO of the fairlead
+    RAO_fl = RAOs[:,:3] + np.cross(RAOs[:,3:],r_fl[np.newaxis,:],axisa=-1,axisb=-1)
 
-    sigma_Xd = 1
+    # intialize iteration matrices    
+    M,A,B,K,n_dofs,r_nodes = get_leg_matrices(ms,fairlead.number,moor_dict,1.)
+    X = np.zeros((len(omegas),n_dofs),dtype = 'complex')
+    S_Xd = np.zeros((len(omegas),n_dofs),dtype = 'float')
+    sigma_Xd = np.zeros(n_dofs,dtype = 'float')
+    sigma_Xd0 = np.zeros(n_dofs,dtype = 'float')
+    X[:,:3] = RAO_fl
+
+    # solving dynamics
     start = datetime.now()
     for ni in range(iters):
-        sigma_Xd0 = sigma_Xd
-        M,A,B,K,n_dofs,r_nodes = get_leg_matrices(ms,fairlead.number,moor_dict,sigma_Xd)
-        X = np.zeros([n_dofs,len(omegas)],dtype = 'complex')
-        X[:3,:] = RAO_fl
-        
-        for nw,omega in enumerate(omegas):
-            H = -omega**2*(M+A) + 1j*omega*B + K
-            F = -np.matmul(H[3:-3,:3],RAO_fl[:,nw])
-            X[3:-3,nw] = la.solve(H[3:-3,3:-3],F)
-        
-        S_Xd = np.abs(1j*omegas*X)**2*S_zeta
-        sigma_Xd = np.sqrt(np.trapz(S_Xd,omegas))
+        H = - omegas[:,np.newaxis,np.newaxis]**2*(M+A)[np.newaxis,:,:]\
+                + 1j*omegas[:,np.newaxis,np.newaxis]*(B)[np.newaxis,:,:]\
+                + K[np.newaxis,:,:]
+        F = np.einsum('nij,njk->ni',-H[:,3:-3,:3],RAO_fl[:,:,np.newaxis])
 
-        if all(np.abs(sigma_Xd-sigma_Xd0) <= tol*np.abs(sigma_Xd0)):
+        X[:,3:-3] = solve(H[:,3:-3,3:-3],F)
+        S_Xd[:] = np.abs(1j*omegas[:,np.newaxis]*X)**2*S_zeta[:,np.newaxis]
+        sigma_Xd[:] = np.sqrt(np.trapz(S_Xd,omegas,axis=0)) 
+
+        if (np.abs(sigma_Xd-sigma_Xd0) <= tol*np.abs(sigma_Xd0)).all():
             break
-    print(f'Finished {ni} dynamic tension iterations in {datetime.now()-start} seconds.')
-        
-    H_zF = np.zeros([n_dofs,len(omegas)],dtype='complex')
-    H_zT = np.zeros([int(n_dofs/3),len(omegas)],dtype='complex')
+        else:
+            M[:],A[:],B[:],K[:],_,_ = get_leg_matrices(ms,fairlead.number,moor_dict,sigma_Xd0)
+    print(f'Finished {ni} dynamic tension iterations in {datetime.now()-start} seconds (w = {w}).')
 
-    start = datetime.now()
+    # evaluating motion to tension transfer function
+    H_zF = np.zeros([len(omegas),n_dofs],dtype='complex')
+    H_zT = np.zeros([len(omegas),int(n_dofs/3)],dtype='complex')
+
+    # start = datetime.now()
     for nw in range(len(omegas)):
         for n in range(int(n_dofs/3 - 1)):
-            H_zF[3*n:3*n+3,nw] = np.matmul(K[3*n:3*n+3,3*n+3:3*n+6],(X[3*n+3:3*n+6,nw] - X[3*n:3*n+3,nw]))
-            H_zT[n,nw] = la.norm(H_zF[3*n:3*n+3,nw])
+            H_zF[nw,3*n:3*n+3] = np.matmul(K[3*n:3*n+3,3*n+3:3*n+6],(X[nw,3*n+3:3*n+6] - X[nw,3*n:3*n+3]))
+            H_zT[nw,n] = la.norm(H_zF[nw,3*n:3*n+3])
     
-        H_zF[-3:,nw] = np.matmul(K[-3:,-3:],(X[-6:-3,nw] - X[-3:,nw]))
-        H_zT[-1,nw] = la.norm(H_zF[-3:,nw])
-    print(f'Finished dynamic tension calculations in {datetime.now()-start} seconds.')
+        H_zF[nw,-3:] = np.matmul(K[-3:,-3:],(X[nw,-6:-3] - X[nw,-3:]))
+        H_zT[nw,-1] = la.norm(H_zF[nw,-3:])
+    # print(f'Finished dynamic tension calculations in {datetime.now()-start} seconds.')
     
-    S_T = np.abs(H_zT)**2*S_zeta 
-    sigma_T = np.sqrt(np.trapz(S_T,omegas))
+    # evaluate tension results
+    S_T = np.abs(H_zT)**2*S_zeta[:,np.newaxis]
+    sigma_T = np.sqrt(np.trapz(S_T,omegas,axis=0))
     
     dr = np.diff(r_nodes,axis=0)
     ds = la.norm(dr,axis=1)
     s = np.zeros(len(sigma_T))
     s[1:] = np.cumsum(ds)
-    
+
     return sigma_T,S_T,s,r_nodes,X
 
 def animate_line_motion(omega,omegas,r_nodes,X_nodes,Amp=1.,t_sim=60,fps=20):
