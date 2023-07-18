@@ -463,6 +463,7 @@ def get_dynamic_tension(ms,fairlead_id,moor_dict,omegas,S_zeta,RAOs,tol = 0.01,i
         if (np.abs(sigma_Xd-sigma_Xd0) <= tol*np.abs(sigma_Xd0)).all():
             break
         else:
+            sigma_Xd0[:] = w * sigma_Xd + (1.-w) * sigma_Xd0
             M[:],A[:],B[:],K[:],_,_ = get_leg_matrices(ms,fairlead.number,moor_dict,sigma_Xd0)
     print(f'Finished {ni} dynamic tension iterations in {datetime.now()-start} seconds (w = {w}).')
 
