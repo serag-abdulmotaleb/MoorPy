@@ -5,6 +5,7 @@ Created on Wed Feb 15 15:10:26 2023
 @author: seragela
 """
 import numpy as np
+from numpy.linalg import solve
 import pandas as pd
 import scipy.linalg as la
 from scipy.interpolate import griddata, interp1d, interp2d, make_interp_spline
@@ -17,9 +18,8 @@ def solve_motions(omega,M,B,Bq,sigma,C,F):
     return X
 
 def get_transfer_function(omega,M,B,C):
-    H = la.inv(-omega**2*M + 1j*omega*B + C)
-    # H = la.inv(-omega**2*M + 1j*omega*(B + np.sqrt(8/np.pi)*np.matmul(Bq,np.diag(sigma))) + C)
-    # H = la.inv(-omega**2*M + 1j*omega*(B + np.sqrt(8/np.pi)*(Bq*np.diag(sigma))) + C)
+    # H = la.inv(-omega**2*M + 1j*omega*B + C)
+    H = solve(-omega**2*M + 1j*omega*B + C,np.eye(M.shape[0]))
     return H
 
 def mean_drift(df_qtf, betai = 0.0, betaj = 0.0): #TODO: add flag to obtain from 9 or 12

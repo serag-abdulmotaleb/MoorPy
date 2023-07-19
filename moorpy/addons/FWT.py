@@ -5,8 +5,11 @@ Created on Thu Feb  9 08:48:46 2023
 @author: seragela
 """
 
-import copy
+import os,copy
+import multiprocessing
+os.environ['OMP_NUM_THREADS'] = str(multiprocessing.cpu_count())
 import numpy as np
+from numpy.linalg import solve
 import pandas as pd
 from scipy.interpolate import LinearNDInterpolator,RegularGridInterpolator,interp1d
 import scipy.stats as stats
@@ -282,6 +285,17 @@ class FWT:
                                  bounds_error=False, fill_value=None)
             # self.bAero = LinearNDInterpolator(list(zip(aero1[:,0],aero1[:,1])),aero1[:,2], fill_value = 0.0)
             # self.aAero = LinearNDInterpolator(list(zip(aero1[:,0],aero1[:,1])),aero1[:,3], fill_value = 0.0)
+            if os.path.exists(aero_root + '.1r'):
+                aero1r = np.loadtxt(aero_root + '.1r')
+                U_vars = np.unique(aero1r[:,0])
+                f_vars = np.unique(aero1r[:,1])
+                x,y = np.meshgrid(U_vars,f_vars,indexing='ij')
+                b_grid = aero1r[:,2].reshape(len(U_vars),len(f_vars))
+                a_grid = aero1r[:,3].reshape(len(U_vars),len(f_vars))
+                self.bAeroR = RegularGridInterpolator((U_vars,f_vars),b_grid,
+                                    bounds_error=False, fill_value=None)
+                self.aAeroR = RegularGridInterpolator((U_vars,f_vars),a_grid,
+                                    bounds_error=False, fill_value=None)
         
         if not cc_flag[2]:
             aero2 = np.loadtxt(aero_root + '.2')
@@ -318,9 +332,9 @@ class FWT:
             6x1 aerodynamic complex exctiation force coefficients.
         """
         
-        A_aero = np.zeros([6,6,len(omega)])
-        B_aero = np.zeros([6,6,len(omega)])
-        H_UF = np.zeros([6,len(omega)])
+        A_aero = np.zeros([len(omega),6,6])
+        B_aero = np.zeros([len(omega),6,6])
+        H_UF = np.zeros([len(omega),6])
 
         # Aerodynamic transformation matrices
         h_hub = self.hHub
@@ -459,6 +473,10 @@ class FWT:
                 else:
                     a_aero = self.aAero((Uw*np.ones(len(omega)),omega/2/np.pi))
                     b_aero = self.bAero((Uw*np.ones(len(omega)),omega/2/np.pi))
+                    
+                    if hasattr(self,'aAeroR'):
+                        a_aero_r = self.aAeroR((Uw*np.ones(len(omega)),omega/2/np.pi))
+                        b_aero_r = self.bAeroR((Uw*np.ones(len(omega)),omega/2/np.pi))
 
             if not self.ccFlag[2]:
                 if self.avgAero:
@@ -466,10 +484,19 @@ class FWT:
                     H_Uf = np.sum(p*f_grid,axis = 1)
                 else:
                     H_Uf = self.fAero((Uw*np.ones(len(omega)),omega/2/np.pi))
-    
-        A_aero = a_aero * np.expand_dims(aero_mat,2) * self.aero
-        B_aero = b_aero * np.expand_dims(aero_mat,2) * self.aero
-        H_UF = H_Uf * np.expand_dims(aero_vec,1) * self.aero
+
+        if hasattr(self,'aAeroR'):
+            A_aero[:,:3,:3] = a_aero[:,np.newaxis,np.newaxis] * np.diag(aero_vec3)[np.newaxis,:,:] * self.aero
+            A_aero[:,3:,3:] = a_aero_r[:,np.newaxis,np.newaxis] * np.diag(1-aero_vec3)[np.newaxis,:,:] * self.aero
+
+            B_aero[:,:3,:3] = b_aero[:,np.newaxis,np.newaxis] * np.diag(aero_vec3)[np.newaxis,:,:] * self.aero
+            B_aero[:,3:,3:] = b_aero_r[:,np.newaxis,np.newaxis] * np.abs(np.diag(1-aero_vec3))[np.newaxis,:,:] * self.aero
+
+        else:
+            A_aero = a_aero[:,np.newaxis,np.newaxis] * aero_mat[np.newaxis,:,:] * self.aero
+            B_aero = b_aero[:,np.newaxis,np.newaxis] * aero_mat[np.newaxis,:,:] * self.aero
+
+        H_UF = H_Uf[:,np.newaxis] * aero_vec[np.newaxis,:] * self.aero
         return A_aero, B_aero, H_UF
         
 
@@ -479,16 +506,17 @@ class FWT:
         if np.abs(beta-self.betas[nb]) > 0.01*self.betas[nb]:
             print(f'Warning: Wave direction chosen {beta} is not available in wave directions. Closest available is {self.betas[nb]}')
             
-        A = np.zeros([6,6,len(omegas)])
-        B = np.zeros([6,6,len(omegas)])
-        Xre = np.zeros([6,len(omegas)])
-        Xim = np.zeros([6,len(omegas)])
-        for i in range(6):
+        A = np.zeros((len(omegas),6,6))
+        B = np.zeros((len(omegas),6,6))
+        Xre = np.zeros([len(omegas),6])
+        Xim = np.zeros([len(omegas),6])
+
+        for i in range(6): # TODO: possible vecotrization using scipy interp1d (be careful because this might actually be slower)
             for j in range(6):
-                A[i,j] = np.interp(omegas,self.omegas,self.A[i,j],left = self.A0[i,j], right = self.Ainf[i,j])
-                B[i,j] = np.interp(omegas,self.omegas,self.B[i,j])
-            Xre[i] = np.interp(omegas,self.omegas,self.Xre[i,:,nb]) * self.hydro1
-            Xim[i] = np.interp(omegas,self.omegas,self.Xim[i,:,nb]) * self.hydro1
+                A[:,i,j] = np.interp(omegas,self.omegas,self.A[:,i,j],left = self.A0[i,j], right = self.Ainf[i,j])
+                B[:,i,j] = np.interp(omegas,self.omegas,self.B[:,i,j])
+            Xre[:,i] = np.interp(omegas,self.omegas,self.Xre[:,nb,i]) * self.hydro1
+            Xim[:,i] = np.interp(omegas,self.omegas,self.Xim[:,nb,i]) * self.hydro1
         
         
         nb = np.argmin(abs(beta - self.betas))
@@ -501,7 +529,7 @@ class FWT:
     def get_hydro2_coeffs(self,omegas,Hs,Tp,gamma,beta = 0.):
 
         omega_lf = 0.05*2*np.pi #omegas.max()#
-        S_sd = np.zeros([6,6,len(omegas)],dtype = 'complex')
+        S_sd = np.zeros((len(omegas),6,6),dtype = 'complex')
         
         for nw,mu in enumerate(omegas):
             if mu <= omega_lf:
@@ -515,7 +543,7 @@ class FWT:
                         raise Warning('Wave direction is not specified in QTF data.')
                         
                     if self.multiQTFsBetas:
-                        qtf[i,:] = self.QTFsFuncs[i](omegas,omegas+mu,beta*np.ones(omegas.shape[0]))
+                        qtf[i,:] = self.QTFsFuncs[i](omegas,omegas+mu,beta*np.ones(len(omegas)))
                     
                     else:
                         qtf[i,:] = self.QTFsFuncs[i](omegas,omegas+mu)
@@ -523,7 +551,7 @@ class FWT:
                 TT = np.array([np.outer(vec,np.conj(vec).T) for vec in qtf.T])
                 TT = np.moveaxis(TT,0,-1)
                 
-                S_sd[:,:,nw] = 8*np.trapz(TT*S_zeta*S_zeta_mu,omegas,axis=2)  * self.hydro2
+                S_sd[nw,:,:] = 8*np.trapz(TT*S_zeta*S_zeta_mu,omegas,axis=2)  * self.hydro2
         return S_sd
     
     
@@ -641,7 +669,7 @@ class FWT:
             raise Warning('Wave direction is not specified in QTF data.')
 
         if self.multiQTFsBetas:
-            f_d = np.array([self.QTFsFuncs[i](omegas,omegas,beta*np.ones(omegas.shape[0])) for i in range(6)])
+            f_d = np.array([self.QTFsFuncs[i](omegas,omegas,beta*np.ones(len(omegas))) for i in range(6)])
         else:
             f_d = np.array([self.QTFsFuncs[i](omegas,omegas) for i in range(6)])
             
@@ -655,162 +683,8 @@ class FWT:
         return F_mean
     
     
-    def get_dynamic_response2(self, K_moor, omegas, Uw, Hs, Tp, TI = 'B', gamma = 'default', beta = 0.0, 
-                             tol = 0.01,iters = 500, M = 0, Khs = 0):
-        
-       
-        # Frequency independent coefficietns (mass, quadratic damping and hydrostatic stiffness)
-        if M == 0 or Khs == 0:
-            M = self.M
-            Khs = self.Khs
-        
-        Bq = self.Bq
-        Blin = self.Blin
-        h_hub = self.hHub
-        
-        # Enviromental spectra
-        S_zeta = jonswap(omegas/2/np.pi, Hm0 = Hs, Tp = Tp, gamma = gamma, normalize = False)/2/np.pi # generate wave elevation spectrum
-        S_Uw = kaimal(omegas/2/np.pi, Uw, h_hub,TI = TI)/2/np.pi
-        # _,S_Uw = kaimal_spectrum(omegas/2/np.pi,120., Uw, h_hub,TI = TI)
-        # S_Uw = S_Uw/2/np.pi
-        
-        # Aerodynamic coefficients and transformation matrices
-        if self.controlFlag in [0,1,2,3,5]:
-            A_aero, B_aero, H_UF, S_Faero = self.get_aero_coeffs(omegas,Uw,beta)
-        elif self.controlFlag in [4]:
-            xi1,xi5,H_UF = self.get_aero_coeffs(omegas,Uw,beta)
-            
-            A_aero = np.zeros([6,6,len(omegas)])
-            B_aero = np.zeros([6,6,len(omegas)])
-                        
-            omegas_n1 = omegas/np.sqrt(1-xi1**2)
-            omegas_n5 = omegas/np.sqrt(1-xi5**2)
-            
-            K = Khs + K_moor
-            a11_aero = K[0,0]/omegas_n1**2 - (M[0,0] + self.A0[0,0])
-            a55_aero = K[4,4]/omegas_n5**2 - (M[4,4] + self.A0[4,4])
-            
-            b11_aero = 2*xi1*np.sqrt((M[0,0] + self.A0[0,0] + a11_aero)**2*omegas_n1**2)
-            b55_aero = 2*xi5*np.sqrt((M[4,4] + self.A0[4,4] + a55_aero)**2*omegas_n5**2)
-            
-            # A_aero[0,0,:] = a11_aero*np.abs(np.cos(beta))
-            # A_aero[1,1,:] = a11_aero*np.abs(np.sin(beta))
-            # A_aero[3,3,:] = a55_aero*np.abs(np.sin(beta))
-            # A_aero[4,4,:] = a55_aero*np.abs(np.cos(beta))
-            
-            B_aero[0,0,:] = b11_aero*np.abs(np.cos(beta))
-            B_aero[1,1,:] = b11_aero*np.abs(np.sin(beta))
-            B_aero[3,3,:] = b55_aero*np.abs(np.sin(beta))
-            B_aero[4,4,:] = b55_aero*np.abs(np.cos(beta))
-        
-                                  
-        # 1st order radiaton and diffraction
-        nb = np.argmin(abs(beta - self.betas))
-        if np.abs(beta-self.betas[nb]) > 0.01*self.betas[nb]:
-            print(f'Warning: Wave direction chosen {beta} is not available in wave directions. Closest available is {self.betas[nb]}')
-            
-        A = np.zeros([6,6,len(omegas)])
-        B = np.zeros([6,6,len(omegas)])
-        Xre = np.zeros([6,len(omegas)])
-        Xim = np.zeros([6,len(omegas)])
-        for i in range(6):
-            for j in range(6):
-                A[i,j] = np.interp(omegas,self.omegas,self.A[i,j],left = self.A0[i,j], right = self.Ainf[i,j])
-                B[i,j] = np.interp(omegas,self.omegas,self.B[i,j])
-            Xre[i] = np.interp(omegas,self.omegas,self.Xre[i,:,nb])
-            Xim[i] = np.interp(omegas,self.omegas,self.Xim[i,:,nb])
-        
-        
-        nb = np.argmin(abs(beta - self.betas))
-        if np.abs(beta-self.betas[nb]) > 0.01*self.betas[nb]:
-            print(f'Warning: Wave direction chosen {beta} is not available in wave directions. Closest available is {self.betas[nb]}')
-        
-        # 2nd order slowly varying hydrodynamic forces
-        omega_lf = 0.05*2*np.pi #omegas.max()#
-        S_sd = np.zeros([6,len(omegas)])
-        
-        for nw,mu in enumerate(omegas):
-            if mu <= omega_lf:
-                
-                S_zeta_mu = jonswap(omegas/2/np.pi+mu/2/np.pi, Hm0 = Hs, Tp = Tp, gamma = gamma, normalize = False)/(2*np.pi) # generate wave elevation spectrum
-                
-                for i in range(6):
-                    
-                    if beta not in np.unique(self.QTFsGrid[2]):
-                        raise Warning('Wave direction is not specified in QTF data.')
-                        
-                    if self.multiQTFsBetas:
-                        qtfs = self.QTFsFuncs[i](omegas,omegas+mu,beta*np.ones(omegas.shape[0]))
-                    
-                    else:
-                        qtfs = self.QTFsFuncs[i](omegas,omegas+mu)
-                    
-                    S_sd[i,nw] = 8*np.trapz(np.abs(qtfs)**2*S_zeta*S_zeta_mu,omegas)
-                    
-        # Initializing loop variables
-        Xd_std = 0*np.ones(6)
-        S_Xwf = np.zeros([6,len(omegas)])
-        S_Xsd = np.zeros([6,len(omegas)])
-        S_Xlf = np.zeros([6,len(omegas)])
-        S_Xdwf = np.zeros([6,len(omegas)])
-        S_Xdsd = np.zeros([6,len(omegas)])
-        S_Xdlf = np.zeros([6,len(omegas)])
-        S_X = np.zeros([6,len(omegas)])
-        S_Xd = np.zeros([6,len(omegas)])
-        
-        H_FX = np.zeros([6,6,len(omegas)],dtype='complex')
-        H_zX = np.zeros([6,len(omegas)],dtype='complex')
-        H_UX = np.zeros([6,len(omegas)],dtype='complex')
-
-        for ni in range(iters):
-            for nw,omega in enumerate(omegas):
-                
-                A_n = A[:,:,nw] + 0*A_aero[:,:,nw]
-                B_n = B[:,:,nw] + 0*B_aero[:,:,nw] + Blin
-                
-                F_hydro = Xre[:,nw] + 1j*Xim[:,nw]
-                F_aero = 0*H_UF[:,nw]
-                
-                H_FX[:,:,nw] = get_transfer_function(omega,M+A_n,B_n,Bq,Xd_std,Khs+K_moor)
-                H_zX[:,nw] = np.matmul(H_FX[:,:,nw],F_hydro)
-                H_UX[:,nw] = np.matmul(H_FX[:,:,nw],F_aero)
-                
-                S_Xwf[:,nw] = S_zeta[nw]*np.abs(H_zX[:,nw])**2
-                S_Xsd[:,nw] = np.diag(np.abs(H_FX[:,:,nw]))**2*S_sd[:,nw] #np.matmul(np.abs(H_FX[:,:,nw])**2,S_sd[:,nw])
-                S_Xlf[:,nw] = S_Uw[nw]*np.abs(H_UX[:,nw])**2 + S_Xsd[:,nw]
-                # S_Xlf[:,nw] = np.diag(H_FX[:,:,nw] @ np.diag(S_Faero[:,nw]) @ np.conjugate(H_FX[:,:,nw]).T)
-                
-                S_Xdwf[:,nw] = S_zeta[nw]*np.abs(1j*omega*H_zX[:,nw])**2
-                S_Xdsd[:,nw] = np.diag(np.abs(1j*omega*H_FX[:,:,nw]))**2*S_sd[:,nw] #np.matmul(np.abs(1j*omega*H_FX[:,:,nw])**2,S_sd[:,nw])
-                S_Xdlf[:,nw] = S_Uw[nw]*np.abs(1j*omega*H_UX[:,nw])**2 + S_Xdsd[:,nw]
-                # S_Xdlf[:,nw] = np.diag(1j*omega*H_FX[:,:,nw] @ np.diag(S_Faero[:,nw]) @ np.conjugate(1j*omega*H_FX[:,:,nw]).T)
-                
-                S_X[:,nw] = S_Xwf[:,nw] + S_Xlf[:,nw]
-                S_Xd[:,nw] = S_Xdwf[:,nw] + S_Xdlf[:,nw]
-                
-            Xd_std0 = Xd_std
-            X_std = np.sqrt(np.trapz(S_X, omegas, axis = 1))
-            Xd_std = np.sqrt(np.trapz(S_Xd, omegas, axis = 1))
-
-            if all(np.abs(Xd_std-Xd_std0) < tol*np.abs(Xd_std0)):
-                break
-        
-        X_wfstd = np.sqrt(np.trapz(S_Xwf, omegas, axis = 1)) # update wave frequency motion std dev
-        X_lfstd = np.sqrt(np.trapz(S_Xlf, omegas, axis = 1)) # update low frequency motion std dev  
-        X_std[3:] *= 180/np.pi
-        X_wfstd[3:] *= 180/np.pi
-        X_lfstd[3:] *= 180/np.pi
-        RAOs = H_zX
-        print(ni)
-        
-        if Uw == 18.5:
-            pass
-        
-        return X_std, X_wfstd, X_lfstd, RAOs, S_Xwf, S_Xlf, S_X
-
-
     def get_dynamic_response(self,K_moor,omegas,Uw,Hs,Tp,TI='B',gamma = 'default',beta = 0.,
-                             tol = 0.01,iters = 500, M = None, Khs = None):
+                             tol = 0.01,iters = 500, M = None, Khs = None, w = 0.8):
         """Evaluates standard deviations, spectra of the total dynamic response and its wave frequency and low frequency components.
 
         Parameters
@@ -885,68 +759,76 @@ class FWT:
         Cd_twr = self.CdTwr
         
         # 1st order radiaton and diffraction coefficients
-        A,B,Xre,Xim = self.get_hydro1_coeffs(omegas,beta)
+        A_rad,B_rad,Xre,Xim = self.get_hydro1_coeffs(omegas,beta)
+        H_zF = Xre + 1j*Xim
         
         # 2nd order slowly varying hydrodynamic spectra
-        S_sd = self.get_hydro2_coeffs(omegas,Hs,Tp,gamma,beta)
+        S_hydro2 = self.get_hydro2_coeffs(omegas,Hs,Tp,gamma,beta)
         
+        # Evaluating total system matrices (mass and stiffness)
+        M_tot = M[np.newaxis,:,:] + A_rad + A_aero
+        K_tot = Khs + K_moor
+        F_hydro = np.sqrt(S_zeta[:,np.newaxis])*H_zF
+        F_aero = np.sqrt(S_Uw[:,np.newaxis])*(H_UF)
+
         # Initializating
         Xd_std = 1*np.ones(6)
-        S_X = np.zeros([6,6,len(omegas)], dtype = 'complex')
-        S_Xwf = np.zeros([6,6,len(omegas)], dtype = 'complex')
-        S_Xlf = np.zeros([6,6,len(omegas)], dtype = 'complex')
-        H_FX = np.zeros([6,6,len(omegas)],dtype='complex')
-        RAOs = np.zeros([6,len(omegas)],dtype = 'complex')
+        Xd0_std = np.zeros(6)
+        B_lin = np.zeros((6,6))
+        B_tot = np.zeros((len(omegas),6,6), dtype = 'complex')
+        S_hydro1 = np.zeros((len(omegas),6,6), dtype = 'complex')
+        S_aero = np.zeros((len(omegas),6,6), dtype = 'complex')
+        S_XXwf = np.zeros((len(omegas),6,6), dtype = 'complex')
+        S_XXlf = np.zeros((len(omegas),6,6), dtype = 'complex')
+        H_XF = np.zeros((len(omegas),6,6),dtype='complex')
+        H_FX = np.zeros((len(omegas),6,6),dtype='complex')
+        I = np.eye(6,dtype='complex')
+        
         start = datetime.now()
         for ni in range(iters):
-            for nw,omega in enumerate(omegas):
-                # Quadratic damping linearization
-                B_lin = np.diag(get_linearized_damping(Bq,Xd_std)) # Platform viscous damping
-                dB1 = get_linearized_damping(0.5*rho_a*d_twr*Cd_twr, np.sqrt(Xd_std[0]**2+Xd_std[1]**2), Uw*(z_twr/h_hub)**alpha_a)
-                dB5 = get_linearized_damping(0.5*rho_a*d_twr*Cd_twr*z_twr**2, np.sqrt(Xd_std[3]**2+Xd_std[4]**2)*z_twr, Uw*(z_twr/h_hub)**alpha_a)
-                B1 = np.trapz(dB1,z_twr)
-                B5 = np.trapz(dB5,z_twr)
-                B_lin += np.diag([B1*np.abs(np.cos(beta)),B1*np.abs(np.sin(beta)),0.,B5*np.abs(np.sin(beta)),B5*np.abs(np.cos(beta)),0.])
-                
-                # Transfer function assembly
-                A_n = A[:,:,nw] + A_aero[:,:,nw]
-                B_n = B[:,:,nw] + B_aero[:,:,nw] + B_add + B_lin
-                H_FX[:,:,nw] = get_transfer_function(omega,M+A_n,B_n,Khs+K_moor)
-
-                # 1st order excitation
-                F_hydro = Xre[:,nw] + 1j*Xim[:,nw]
-                F_aero = H_UF[:,nw]
-                RAOs[:,nw] = np.matmul(H_FX[:,:,nw],F_hydro)
-                
-                # Excitation spectra
-                S_hydro1 = S_zeta[nw] * np.outer(F_hydro,np.conj(F_hydro).T)
-                S_hydro2 = S_sd[:,:,nw]
-                S_aero = S_Uw[nw] * np.outer(F_aero,np.conj(F_aero).T)
-                
-                # Response calculation
-                S_Xwf[:,:,nw] = H_FX[:,:,nw] @ S_hydro1 @ np.conj(H_FX[:,:,nw]).T
-                S_Xlf[:,:,nw] = H_FX[:,:,nw] @ S_hydro2 @ np.conj(H_FX[:,:,nw]).T +\
-                                H_FX[:,:,nw] @ S_aero @ np.conj(H_FX[:,:,nw]).T
-                S_X[:,:,nw] = S_Xwf[:,:,nw] + S_Xlf[:,:,nw]
-
-            Xd_std0 = Xd_std
-            Xd_std = np.sqrt(np.diag(np.trapz(omegas**2*S_X, omegas, axis=2)))
+            # Quadratic damping linearization
+            B_lin[:,:] = np.diag(get_linearized_damping(Bq,Xd_std)) + B_add # Platform viscous damping
+            dB1 = get_linearized_damping(0.5*rho_a*d_twr*Cd_twr, np.sqrt(Xd_std[0]**2+Xd_std[1]**2), Uw*(z_twr/h_hub)**alpha_a)
+            dB5 = get_linearized_damping(0.5*rho_a*d_twr*Cd_twr*z_twr**2, np.sqrt(Xd_std[3]**2+Xd_std[4]**2)*z_twr, Uw*(z_twr/h_hub)**alpha_a)
+            B1 = np.trapz(dB1,z_twr)
+            B5 = np.trapz(dB5,z_twr)
+            B_lin[:,:] += np.diag([B1*np.abs(np.cos(beta)),B1*np.abs(np.sin(beta)),0.,B5*np.abs(np.sin(beta)),B5*np.abs(np.cos(beta)),0.])
             
-            if all(np.abs(Xd_std-Xd_std0) < tol*np.abs(Xd_std0)):
-                break
-        print(f'Finished {ni} motion response iterations in {datetime.now()-start} seconds.')
+            # Update damping and transfer function
+            B_tot[:,:,:] = B_rad + B_aero + B_lin[np.newaxis,:,:]
+            H_XF[:,:,:] = -omegas[:,np.newaxis,np.newaxis]**2 * M_tot \
+                          + 1j*omegas[:,np.newaxis,np.newaxis] * B_tot \
+                          + K_tot
+            
+            # Evaluate response spectra (vectorized)
+            H_FX[:,:,:] = solve(H_XF,I[np.newaxis,:,:])
 
-        X_std = np.sqrt(np.diag(np.trapz(np.abs(S_X), omegas, axis=2)))
-        X_wfstd = np.sqrt(np.diag(np.trapz(np.abs(S_Xwf), omegas, axis = 2))) # update wave frequency motion std dev
-        X_lfstd = np.sqrt(np.diag(np.trapz(np.abs(S_Xlf), omegas, axis = 2))) # update low frequency motion std dev  
+            S_hydro1[:,:,:] = np.einsum('ij,ik->ijk', F_hydro, F_hydro.conj())
+            S_aero[:,:,:] = np.einsum('ij,ik->ijk', F_aero, F_aero.conj())
+            S_XXwf[:,:,:] = np.einsum('nij,njk,nkl->nil',H_FX,S_hydro1,H_FX.conj().swapaxes(1,2))
+            S_XXlf[:,:,:] = np.einsum('nij,njk,nkl->nil',H_FX,S_hydro2,H_FX.conj().swapaxes(1,2)) + \
+                            np.einsum('nij,njk,nkl->nil',H_FX,S_aero,H_FX.conj().swapaxes(1,2))
+
+            S_XX = S_XXwf + S_XXlf
+            S_X = np.diagonal(np.abs(S_XX),axis1=1,axis2=2)
+
+            Xd_std[:] = np.sqrt(np.trapz(omegas[:,np.newaxis]**2*S_X, omegas, axis=0))
+
+            if (np.abs(Xd_std-Xd0_std) <= tol*np.abs(Xd0_std)).all():
+                break
+            else:
+                Xd0_std[:] = w * Xd_std + (1.-w) * Xd0_std
+        # print(f'Finished {ni} motion response iterations in {datetime.now()-start} seconds (w = {w}).')
+
+        RAOs = np.matmul(H_FX,H_zF[:,:,np.newaxis])[:,:,0]
+        S_Xwf = np.diagonal(np.abs(S_XXwf),axis1=1,axis2=2)
+        S_Xlf = np.diagonal(np.abs(S_XXlf),axis1=1,axis2=2)
+
+        X_std = np.sqrt(np.trapz(S_X, omegas, axis=0))
+        X_wfstd = np.sqrt(np.trapz(S_Xwf, omegas, axis = 0)) # update wave frequency motion std dev
+        X_lfstd = np.sqrt(np.trapz(S_Xlf, omegas, axis = 0)) # update low frequency motion std dev  
         X_std[3:] *= 180/np.pi
         X_wfstd[3:] *= 180/np.pi
         X_lfstd[3:] *= 180/np.pi
-        
-        S_X = np.abs(np.diagonal(S_X).T)
-        S_Xwf = np.abs(np.diagonal(S_Xwf).T)
-        S_Xlf = np.abs(np.diagonal(S_Xlf).T)
-
-        print(ni)
         
         return X_std, X_wfstd, X_lfstd, RAOs, S_X, S_Xwf, S_Xlf

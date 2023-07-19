@@ -34,8 +34,14 @@ def read_wamit1(wamit_root, normalized = True):
     
     
     periods = np.flip(np.unique(PER[PER>0]))
-    A = np.zeros([np.max(I),np.max(J),len(periods)])
-    B = np.zeros([np.max(I),np.max(J),len(periods)])
+    
+    # A = np.zeros([np.max(I),np.max(J),len(periods)])
+    # B = np.zeros([np.max(I),np.max(J),len(periods)])
+    # A_0 = np.zeros([np.max(I),np.max(J)])
+    # A_inf = np.zeros([np.max(I),np.max(J)])
+        
+    A = np.zeros([len(periods),np.max(I),np.max(J)])
+    B = np.zeros([len(periods),np.max(I),np.max(J)])
     A_0 = np.zeros([np.max(I),np.max(J)])
     A_inf = np.zeros([np.max(I),np.max(J)])
     
@@ -43,13 +49,13 @@ def read_wamit1(wamit_root, normalized = True):
     for i in range(np.max(I)):
         for j in range(np.max(J)):
             if len(Aij[PER>0][np.all([I[PER>0]==i+1,J[PER>0]==j+1],axis = 0)]) > 0:
-                A[i,j,:] = Aij[PER>0][np.all([I[PER>0]==i+1,J[PER>0]==j+1],axis = 0)]
+                A[:,i,j] = Aij[PER>0][np.all([I[PER>0]==i+1,J[PER>0]==j+1],axis = 0)]
             else:
-                A[i,j,:] = 0
+                A[:,i,j] = 0
             if len(Bij[np.all([I[PER>0]==i+1,J[PER>0]==j+1],axis = 0)]) > 0:
-                B[i,j,:] = Bij[np.all([I[PER>0]==i+1,J[PER>0]==j+1],axis = 0)]
+                B[:,i,j] = Bij[np.all([I[PER>0]==i+1,J[PER>0]==j+1],axis = 0)]
             else:
-                B[i,j,:] = 0
+                B[:,i,j] = 0
             if len(Aij[PER==0][np.all([I[PER==0]==i+1,J[PER==0]==j+1],axis = 0)]) > 0:
                 A_inf[i,j] = Aij[PER==0][np.all([I[PER==0]==i+1,J[PER==0]==j+1],axis = 0)]
             else:
@@ -65,7 +71,7 @@ def read_wamit1(wamit_root, normalized = True):
         A_inf *= 1025
         for i in range(6):
             for j in range(6):
-                B[i,j,:] *= 2*np.pi/periods*1025
+                B[:,i,j] *= 2*np.pi/periods*1025
         
     return periods, A, B, A_0, A_inf
 
@@ -83,17 +89,23 @@ def read_wamit3(wamit_root, normalized = True):
     
     periods = np.flip(np.unique(PER[PER>0]))
     headings = np.unique(BETA)
-    Xmod = np.zeros([np.max(I),len(periods),len(headings)])
-    Xpha = np.zeros([np.max(I),len(periods),len(headings)])
-    Xre = np.zeros([np.max(I),len(periods),len(headings)])
-    Xim = np.zeros([np.max(I),len(periods),len(headings)])
+    
+    # Xmod = np.zeros([np.max(I),len(periods),len(headings)])
+    # Xpha = np.zeros([np.max(I),len(periods),len(headings)])
+    # Xre = np.zeros([np.max(I),len(periods),len(headings)])
+    # Xim = np.zeros([np.max(I),len(periods),len(headings)])
+
+    Xmod = np.zeros([len(periods),len(headings),np.max(I)])
+    Xpha = np.zeros([len(periods),len(headings),np.max(I)])
+    Xre = np.zeros([len(periods),len(headings),np.max(I)])
+    Xim = np.zeros([len(periods),len(headings),np.max(I)])
     
     for i in range(np.max(I)):
         for m,beta in enumerate(headings):
-            Xmod[i,:,m] = ModXi[np.all([I==i+1, BETA == beta],axis = 0)]
-            Xpha[i,:,m] = PhaXi[np.all([I==i+1, BETA == beta],axis = 0)]
-            Xre[i,:,m] = ReXi[np.all([I==i+1, BETA == beta],axis = 0)]
-            Xim[i,:,m] = ImXi[np.all([I==i+1, BETA == beta],axis = 0)]
+            Xmod[:,m,i] = ModXi[np.all([I==i+1, BETA == beta],axis = 0)]
+            Xpha[:,m,i] = PhaXi[np.all([I==i+1, BETA == beta],axis = 0)]
+            Xre[:,m,i] = ReXi[np.all([I==i+1, BETA == beta],axis = 0)]
+            Xim[:,m,i] = ImXi[np.all([I==i+1, BETA == beta],axis = 0)]
     
     if not normalized:
         Xmod *= 1025*9.81
