@@ -242,7 +242,7 @@ class Line():
             except CatenaryError as error:
                 raise LineError(self.number, error.message)
             
-            Xs = self.rA[0] + info["X"]*dr[0]/LH
+            Xs = self.rA[0] + info["X"]*dr[0]/LH 
             Ys = self.rA[1] + info["X"]*dr[1]/LH
             Zs = self.rA[2] + info["Z"]
             Ts = info["Te"]
@@ -290,8 +290,8 @@ class Line():
         Ss = np.linspace(0, self.L, n)
         Xs, Ys, Zs, Ts = self.getLineCoords(0.0, n=n)
         
-        X = np.interp(s, Ss, Xs)*dr[0]/LH
-        Y = np.interp(s, Ss, Ys)*dr[1]/LH
+        X = np.interp(s, Ss, Xs)#*dr[0]/LH #NOTE: the X component was already taken in getLineCoords method
+        Y = np.interp(s, Ss, Ys)#*dr[1]/LH #NOTE: the Y component was already taken in getLineCoords method
         Z = np.interp(s, Ss, Zs)
         T = np.interp(s, Ss, Ts)
         

@@ -676,7 +676,6 @@ class FWT:
         f_drift = np.real(f_d)
         S_zeta = jonswap(omegas/2/np.pi, Hm0 = Hs, Tp = Tp, gamma = gamma, normalize = False)/(2*np.pi)
         F_drift = np.array([2*np.trapz(f_drift[dof,:]*S_zeta,omegas) for dof in range(6)]) * self.hydro2
-        
         #### TODO: current drag
         
         F_mean = F_thrust + F_drift + F_twr
@@ -737,7 +736,7 @@ class FWT:
             M = self.M
         if (Khs is None):
             Khs = self.Khs
-        
+
         Bq = np.diag(self.Bq)
         B_add = self.Blin
         
@@ -750,7 +749,7 @@ class FWT:
 
         # Rotor aerodynamic coefficients
         A_aero, B_aero, H_UF = self.get_aero_coeffs(omegas,Uw,sigma_u,beta)
-        
+
         # TODO: tower aerodynamic coefficients
         rho_a = 1.225
         alpha_a = 0.14
@@ -793,7 +792,7 @@ class FWT:
             B1 = np.trapz(dB1,z_twr)
             B5 = np.trapz(dB5,z_twr)
             B_lin[:,:] += np.diag([B1*np.abs(np.cos(beta)),B1*np.abs(np.sin(beta)),0.,B5*np.abs(np.sin(beta)),B5*np.abs(np.cos(beta)),0.])
-            
+
             # Update damping and transfer function
             B_tot[:,:,:] = B_rad + B_aero + B_lin[np.newaxis,:,:]
             H_XF[:,:,:] = -omegas[:,np.newaxis,np.newaxis]**2 * M_tot \
